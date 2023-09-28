@@ -1,0 +1,94 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClient.h>
+#include <ArduinoJson.h>
+
+const char* ssid = "Elconics";
+const char* password = "Elconics@123";
+
+const char* serverName = "http://app.antzsystems.com/api/v1/iot/enclosure/metric/update"; // Use HTTP (insecure)
+
+unsigned long lastTime = 0;
+unsigned long timerDelay = 5000;
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(ssid, password);
+  Serial.println("Connecting");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.print("Connected to WiFi network with IP Address: ");
+  Serial.println(WiFi.localIP());
+  Serial.println("Timer set to 5 seconds (timerDelay variable), it will take 5 seconds before publishing the first reading.");
+}
+
+void loop() {
+  if ((millis() - lastTime) > timerDelay) {
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("Sending HTTP request...");
+
+      // Your Domain name with URL path
+      Serial.println("Server URL: " + String(serverName));
+
+      // Specify content-type header as application/json
+      HTTPClient http;
+
+      // Use WiFiClient for HTTP (insecure)
+      WiFiClient client;
+
+      http.begin(client, serverName);
+
+      // Create JSON data
+      DynamicJsonDocument jsonDoc(512); // Adjust the buffer size as needed
+      JsonObject root = jsonDoc.to<JsonObject>();
+      root["enclosure_id"] = 123;
+
+      JsonArray values = root.createNestedArray("values");
+
+      JsonObject temperatureObj = values.createNestedObject();
+      temperatureObj["key"] = "Temperature";
+      temperatureObj["value"] = 327;
+      temperatureObj["uom"] = "celcius";
+      temperatureObj["event_date"] = "2023-08-31T22:14:00";
+
+      JsonObject humidityObj = values.createNestedObject();
+      humidityObj["key"] = "Humidity";
+      humidityObj["value"] = 123;
+      humidityObj["uom"] = "";
+      humidityObj["event_date"] = "2023-08-31T22:14:00";
+
+      // Serialize JSON to a string
+      String jsonString;
+      serializeJson(root, jsonString);
+      Serial.println("JSON Data: " + jsonString);
+
+      // Send HTTP POST request with JSON data
+      http.addHeader("Content-Type", "application/json");
+      int httpResponseCode = http.POST(jsonString);
+
+      Serial.print("HTTP Response code: ");
+      Serial.println(httpResponseCode);
+
+      // Check for a successful HTTP response (200 OK)
+      if (httpResponseCode == 200) {
+        // Parse and print the response
+        String response = http.getString();
+        Serial.println("Server response: " + response);
+      } else {
+        Serial.println("HTTP request failed");
+      }
+
+      // Free resources
+      http.end();
+    } else {
+      Serial.println("WiFi Disconnected");
+    }
+
+    lastTime = millis();
+  }
+}
