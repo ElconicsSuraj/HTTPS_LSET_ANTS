@@ -1,0 +1,144 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <ArduinoJson.h>
+#include "time.h"
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#define ONE_WIRE_BUS 4
+OneWire oneWire(ONE_WIRE_BUS);
+// Pass our oneWire reference to Dallas Temperature.
+DallasTemperature sensors(&oneWire);
+float batteryvoltage();
+String Time();
+const char* ssid = "Lifetrust_Office";
+const char* password = "Lifetrust@123";
+const char* serverName = "http://app.antzsystems.com/api/v1/iot/enclosure/metric/update"; // Use HTTP (insecure)
+const int vcc = 13;
+const char* ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 0;
+const int daylightOffset_sec = 19800;
+
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, ntpServer);
+
+String currentDate;
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(ssid, password);
+  Serial.println("Connecting");
+  pinMode(vcc, OUTPUT);
+  digitalWrite(vcc, LOW);
+  pinMode(A0,INPUT);
+  // Initialize NTPClient to get time
+  timeClient.begin();
+  timeClient.setTimeOffset(0);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.print("Connected to WiFi network with IP Address: ");
+  Serial.println(WiFi.localIP());
+  Serial.println("Timer set to 1 minute (timerDelay variable), entering deep sleep...");
+
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  timeClient.setTimeOffset(19800); // Set the time zone offset in seconds (19800 seconds = +5:30 GMT for India)
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Time();
+    Serial.println("Time" + String(currentDate));
+
+    // Fetch NTP time
+    Serial.println("Fetching NTP time...");
+    timeClient.update();
+
+    // Your Domain name with URL path
+    Serial.println("Server URL: " + String(serverName));
+
+    // Create JSON data
+    DynamicJsonDocument jsonDoc(512);
+    JsonObject root = jsonDoc.to<JsonObject>();
+    root["enclosure_id"] = 170;
+
+    JsonArray values = root.createNestedArray("values");
+
+      // put your main code here, to run repeatedly:
+
+    sensors.requestTemperatures(); // Send the command to get temperatures
+
+    Serial.println(sensors.getTempCByIndex(0));
+
+ 
+    JsonObject Tempreture = values.createNestedObject();
+    Tempreture["key"] = "Koi Pond";
+    Tempreture["value"] = sensors.getTempCByIndex(0);
+    Tempreture["uom"] = "Celcius";
+    Tempreture["event_date"] = currentDate;
+
+    JsonObject Battery_level = values.createNestedObject();
+    Battery_level["key"] = "Battery_Voltage";
+    Battery_level["value"] = batteryvoltage();
+    Battery_level["uom"] = "Volt";
+    Battery_level["event_date"] = currentDate;
+
+
+    String jsonString;
+    serializeJson(root, jsonString);
+    Serial.println("JSON Data: " + jsonString);
+
+    HTTPClient http;
+    WiFiClient client;
+
+    http.begin(client, serverName);
+    http.addHeader("Content-Type", "application/json");
+    int httpResponseCode = http.POST(jsonString);
+    http.end();
+
+    // Enter deep sleep for 1 minute
+    ESP.deepSleep(900e6); // 60e6 microseconds = 1 minute
+  } else {
+    Serial.println("WiFi Disconnected");
+  }
+}
+
+void loop() {}
+
+String Time() {
+  timeClient.update();
+  time_t epochTime = timeClient.getEpochTime();
+
+  int currentHour = timeClient.getHours();
+  int currentMinute = timeClient.getMinutes();
+  int currentSecond = timeClient.getSeconds();
+
+  // Get a time structure
+  struct tm *ptm = gmtime((time_t *)&epochTime);
+
+  int monthDay = ptm->tm_mday;
+  int currentMonth = ptm->tm_mon + 1;
+
+  int currentYear = ptm->tm_year + 1900;
+
+  currentDate = String(currentYear) + ":" + String(currentMonth) + ":" + String(monthDay) + ":" + String(currentHour) + ":" + String(currentMinute) + ":" + String(currentSecond);
+
+  return currentDate;
+}
+
+
+
+
+float batteryvoltage() {
+  // Read analog value from pin A0
+  int sensorValue = analogRead(A0);
+  float voltage = (0.00097 * sensorValue); // Convert analog value to voltage
+  voltage = voltage * 4.2; // Adjust calibration
+  Serial.println("Voltage: " + String(voltage) + "v"); // Print the adjusted voltage
+
+  delay(100); 
+  return voltage;
+}
