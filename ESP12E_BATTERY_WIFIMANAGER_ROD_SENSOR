@@ -1,0 +1,169 @@
+#include <WiFiManager.h>
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <ArduinoJson.h>
+#include "time.h"
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+#define ONE_WIRE_BUS 4
+#define hrdrst 4
+
+// Define the pin for the OneWire bus
+OneWire oneWire(ONE_WIRE_BUS);
+
+// Pass the OneWire reference to Dallas Temperature.
+DallasTemperature sensors(&oneWire);
+
+// Function prototypes
+void config_network();
+String Time();
+float batteryvoltage();
+
+// WiFi credentials for initial connection or fallback
+const char* ssid = "Antz";
+const char* password = "Antz@123";
+
+// Server details for sending data
+const char* serverName = "http://app.antzsystems.com/api/v1/iot/enclosure/metric/update";
+const char* ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 0;
+const int daylightOffset_sec = 19800;
+
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, ntpServer);
+
+String currentDate;
+
+void setup() {
+  // Initialize serial communication
+  Serial.begin(115200);
+
+  // Try to connect to WiFi using saved credentials or enter configuration mode
+  WiFiManager wm;
+  bool success = wm.autoConnect(ssid, password);
+
+  if (!success) {
+    Serial.println("Failed to connect");
+    config_network();
+  } else {
+    Serial.println("Connected");
+  }
+
+  // Set pin 4 as input with pull-up resistor
+  pinMode(hrdrst, INPUT);
+  delay(1000);
+  int status = digitalRead(hrdrst);
+
+  if (status == LOW) {
+    config_network();
+  }
+
+  // Initialize NTPClient to get time
+  timeClient.begin();
+  timeClient.setTimeOffset(0);
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  timeClient.setTimeOffset(19800);
+
+  if (success == 1) {
+    // Fetch current time
+    Time();
+    Serial.println("Time: " + String(currentDate));
+
+    // Fetch NTP time
+    Serial.println("Fetching NTP time...");
+    timeClient.update();
+
+    // Server URL
+    Serial.println("Server URL: " + String(serverName));
+
+    // Create JSON data
+    DynamicJsonDocument jsonDoc(512);
+    JsonObject root = jsonDoc.to<JsonObject>();
+    root["enclosure_id"] = 180;
+
+    JsonArray values = root.createNestedArray("values");
+
+    // Get temperature from sensors
+    sensors.requestTemperatures();
+    Serial.println("Temperature: " + String(sensors.getTempCByIndex(0)));
+
+    // Temperature data
+    JsonObject temperatureData = values.createNestedObject();
+    temperatureData["key"] = "Koi Pond";
+    temperatureData["value"] = sensors.getTempCByIndex(0);
+    temperatureData["uom"] = "Celsius";
+    temperatureData["event_date"] = currentDate;
+
+    // Battery voltage data
+    JsonObject batteryData = values.createNestedObject();
+    batteryData["key"] = "Battery_Voltage";
+    batteryData["value"] = batteryvoltage();
+    batteryData["uom"] = "Volt";
+    batteryData["event_date"] = currentDate;
+
+    // Convert JSON to string
+    String jsonString;
+    serializeJson(root, jsonString);
+    Serial.println("JSON Data: " + jsonString);
+
+    // Initialize HTTP client
+    HTTPClient http;
+    WiFiClient client;
+
+    // Send data to the server
+    http.begin(client, serverName);
+    http.addHeader("Content-Type", "application/json");
+    int httpResponseCode = http.POST(jsonString);
+    http.end();
+
+    // Enter deep sleep for 1 minute
+    ESP.deepSleep(900e6); // 60e6 microseconds = 1 minute
+  }
+}
+
+void loop() {}
+
+// Function to fetch and format current time
+String Time() {
+  timeClient.update();
+  time_t epochTime = timeClient.getEpochTime();
+  struct tm *ptm = gmtime((time_t *)&epochTime);
+
+  int currentHour = ptm->tm_hour;
+  int currentMinute = ptm->tm_min;
+  int currentSecond = ptm->tm_sec;
+  int monthDay = ptm->tm_mday;
+  int currentMonth = ptm->tm_mon + 1;
+  int currentYear = ptm->tm_year + 1900;
+
+  currentDate = String(currentYear) + ":" + String(currentMonth) + ":" + String(monthDay) + ":" + String(currentHour) + ":" + String(currentMinute) + ":" + String(currentSecond);
+
+  return currentDate;
+}
+
+// Function to read battery voltage
+float batteryvoltage() {
+  int sensorValue = analogRead(A0);
+  float voltage = (0.00097 * sensorValue);
+  voltage = voltage * 4.2;
+  Serial.println("Voltage: " + String(voltage) + "V");
+
+  delay(100);
+  return voltage;
+}
+
+// Function to configure WiFi network using WiFiManager
+void config_network() {
+  WiFiManager manager;
+  manager.resetSettings();
+  bool success = manager.autoConnect(ssid, password);
+
+  if (!success) {
+    Serial.println("Failed to connect");
+  } else {
+    Serial.println("Connected");
+  }
+}
